@@ -110,6 +110,12 @@ def _cmd_download(args: argparse.Namespace) -> int:
     err.print(
         f"[bold cyan]preparing {len(all_files)} files, total {_fmt_size(total)} → {dest}[/bold cyan]"
     )
+
+    if args.dry_run:
+        for f in all_files:
+            console.print(f"{_fmt_size(f.size):>10}  {f.name}")
+        return 0
+
     plan = build_plan(all_files, dest)
 
     results = download_all(
@@ -181,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("--save-password", action="store_true", help="Save password to system keychain on login.")
     dl.add_argument("--no-extract", dest="extract", action="store_false", help="Do not unzip archives after download.")
     dl.add_argument("--delete-zips-after", action="store_true", help="Delete .zip after successful extract.")
+    dl.add_argument("--dry-run", action="store_true", help="List files that would be downloaded, then exit.")
     dl.set_defaults(extract=True, func=_cmd_download)
 
     lg = sub.add_parser("login", help="Open a browser and establish a Hightail session.")

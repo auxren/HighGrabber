@@ -122,16 +122,36 @@ def interactive_login(
     prefilled. Any reCaptcha / anti-bot step still requires the user to act.
     """
     if email is None:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "no --email given and stdin is not a terminal; "
+                "pass --email EMAIL on the command line"
+            )
         email = input("Hightail email: ").strip()
     password = _get_keychain_password(email)
     if password is None:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "no password for this email in the system keychain and stdin is "
+                "not a terminal. Run `highgrabber login --email EMAIL --save-password` "
+                "interactively first."
+            )
         password = getpass.getpass("Hightail password: ")
         if save_password:
             _save_keychain_password(email, password)
 
     config.ensure_dirs()
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless)
+        try:
+            browser = pw.chromium.launch(headless=headless)
+        except Exception as exc:
+            msg = str(exc)
+            if "Executable doesn't exist" in msg or "playwright install" in msg.lower():
+                raise RuntimeError(
+                    "Playwright's Chromium browser is not installed. Run:\n"
+                    "    python -m playwright install chromium"
+                ) from exc
+            raise
         ctx = browser.new_context(user_agent=config.DEFAULT_USER_AGENT)
         page = ctx.new_page()
 
