@@ -141,6 +141,13 @@ def interactive_login(
             _save_keychain_password(email, password)
 
     config.ensure_dirs()
+    console.print(
+        "\n[bold cyan]A Chromium window is about to open so you can sign in to Hightail.[/bold cyan]\n"
+        "  • Your email is filled in; enter your password if it's not saved.\n"
+        "  • If Hightail shows a CAPTCHA, solve it and click Sign In.\n"
+        "  • The window closes automatically once the session is saved.\n"
+        "  • Your login cookies are stored locally; nothing is sent anywhere else.\n"
+    )
     with sync_playwright() as pw:
         try:
             browser = pw.chromium.launch(headless=headless)
@@ -149,13 +156,12 @@ def interactive_login(
             if "Executable doesn't exist" in msg or "playwright install" in msg.lower():
                 raise RuntimeError(
                     "Playwright's Chromium browser is not installed. Run:\n"
-                    "    python -m playwright install chromium"
+                    "    highgrabber doctor"
                 ) from exc
             raise
         ctx = browser.new_context(user_agent=config.DEFAULT_USER_AGENT)
         page = ctx.new_page()
 
-        console.print(f"[cyan]opening {config.LOGIN_URL}[/cyan]")
         page.goto(config.LOGIN_URL, wait_until="domcontentloaded")
 
         # Best-effort form auto-fill. Selectors are resilient to minor changes:
@@ -167,11 +173,7 @@ def interactive_login(
         except PWTimeoutError:
             console.print("[yellow]login form did not appear — complete login manually.[/yellow]")
 
-        console.print(
-            "[bold]Complete the login in the browser window.[/bold]\n"
-            "If a CAPTCHA appears, solve it and click Sign In.\n"
-            "This window will close automatically when the session is established."
-        )
+        console.print("[dim]waiting for sign-in to complete…[/dim]")
 
         # Wait for the session cookie Hightail sets server-side post-login.
         deadline = time.time() + 300

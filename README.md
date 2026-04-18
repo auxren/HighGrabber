@@ -32,28 +32,29 @@ Requires **Python 3.10+**.
 ### With pipx (recommended)
 
 ```bash
-pipx install git+https://github.com/auxren/HighGrabber.git
-highgrabber --version
-
-# One-time: install the Playwright browser used for login
-python -m playwright install chromium
+pipx install highgrabber
+highgrabber doctor        # downloads the browser used for login
 ```
+
+Prefer to pin to a specific version? `pipx install highgrabber==0.1.1`.
 
 ### With uv
 
 ```bash
-uv tool install git+https://github.com/auxren/HighGrabber.git
-python -m playwright install chromium
+uv tool install highgrabber
+highgrabber doctor
 ```
 
-### From source
+### From source (or a branch)
 
 ```bash
-git clone https://github.com/auxren/HighGrabber.git
-cd HighGrabber
-pip install -e .
-python -m playwright install chromium
+pipx install git+https://github.com/auxren/HighGrabber.git
+highgrabber doctor
 ```
+
+`highgrabber doctor` installs Playwright's Chromium into the right virtual
+environment and verifies your session is good. Run it once after install
+and any time you see a browser-related error.
 
 ## Quickstart
 
@@ -141,27 +142,63 @@ of large archives, and the symptom is `HTTP 200` with an empty body.
 
 ## Troubleshooting
 
-**`no valid cached session`** — run `highgrabber login`. This is normal on a
-fresh install or after a long break.
+**`no valid cached session` / session expired prompts** — run
+`highgrabber login`. Normal on a fresh install or after a long break. If
+you've been signed out because you logged in to Hightail from somewhere
+else (including another HighGrabber machine), Hightail rotates your
+session cookie server-side, so running `login` again is the fix.
 
 **The browser window closes immediately / login times out** — the window
 waits 5 minutes for a successful login. If Hightail shows a CAPTCHA, solve
-it and click Sign In; the window closes as soon as the session cookie lands.
+it and click Sign In; the window closes as soon as the session cookie
+lands. If nothing appears at all, run `highgrabber doctor` to check that
+Chromium is installed.
 
-**Playwright says "Executable doesn't exist"** — you skipped
-`python -m playwright install chromium`. Run it once.
+**`Executable doesn't exist` / Playwright browser errors** — run
+`highgrabber doctor`. It installs Chromium into the right environment.
+The older `python -m playwright install chromium` pattern only works if
+you installed HighGrabber into your system Python, not via pipx/uv.
 
-**Downloads keep failing with `got=0 of N`** — you're being rate-limited.
-Lower `--concurrency` to `1`, wait ~10 minutes, and re-run. HighGrabber
-resumes partial downloads, so nothing is lost.
+**Downloads fail with `got=0 of N` or `HTTP 307` redirects** — you're
+being rate-limited by Hightail. HighGrabber already backs off
+(15 s / 60 s / 3 min / 5 min), but if it gives up:
 
-**`macOS: keychain access denied`** — the keyring prompt defaults to
-"Allow Always" once you approve. If you clicked Deny, run
-`highgrabber logout --forget-password --email you@example.com` and log in
-again.
+- Lower `--concurrency` to `1`.
+- Wait 10–15 minutes, then re-run the same command. Partial downloads
+  resume via HTTP `Range` so nothing's lost.
+- If it persists for hours, your IP may be temporarily flagged; switching
+  network (e.g. VPN on/off) usually clears it.
 
-**A space returns 404 / "unavailable"** — Hightail expired or removed that
-upload. The error is per-space; other links in the same run continue.
+**Wrong keychain password / authentication loop** — the keyring has a
+stale password. Fix:
+```bash
+highgrabber logout --forget-password --email you@example.com
+highgrabber login  --email you@example.com --save-password
+```
+
+**`macOS: keychain access denied`** — the macOS Keychain prompt defaults
+to "Allow Always" once you approve. If you clicked Deny, follow the
+keychain-reset recipe above.
+
+**Disk full mid-batch** — partial files stay on disk; free space, re-run
+the same command, and downloads resume from the last byte.
+
+**Corporate proxy** — HighGrabber uses httpx, which respects standard
+env vars:
+```bash
+HTTPS_PROXY=http://proxy.corp:8080 highgrabber <urls>
+```
+
+**Windows: Chromium blocked by antivirus** — some AV products quarantine
+Playwright's bundled Chrome Headless Shell. Allow
+`%LOCALAPPDATA%\ms-playwright\` in your AV, then run
+`highgrabber doctor` again.
+
+**A space returns 404 / "unavailable"** — Hightail expired or removed
+that upload. It's per-space; other links in the same run continue.
+
+**I want to see what would happen without actually downloading** —
+`highgrabber --dry-run <urls>` prints every file and its size, then exits.
 
 ## Ethics & Terms
 

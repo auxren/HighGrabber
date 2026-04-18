@@ -9,6 +9,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,7 @@ from typing import Optional
 from rich.console import Console
 
 from . import __version__
-from . import auth
+from . import auth, config
 from .api import HightailClient, SessionExpired, SpaceUnavailable
 from .download import DownloadResult, build_plan, download_all
 from .extract import extract_zip, is_zip
@@ -41,6 +42,46 @@ def _cmd_login(args: argparse.Namespace) -> int:
         headless=False,
     )
     return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """Run first-time setup and health checks."""
+    ok = True
+
+    err.print(f"[bold]HighGrabber[/bold] {__version__}")
+    err.print(f"  config dir:   {config.CONFIG_DIR}")
+    err.print(f"  session file: {config.STORAGE_STATE_PATH}")
+
+    try:
+        config.ensure_dirs()
+        err.print("[green]✓[/green] config dir writable")
+    except OSError as exc:
+        err.print(f"[red]✗ config dir not writable:[/red] {exc}")
+        ok = False
+
+    err.print("[cyan]→ installing Playwright Chromium (may take a minute)…[/cyan]")
+    proc = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=False,
+    )
+    if proc.returncode == 0:
+        err.print("[green]✓[/green] Chromium installed")
+    else:
+        err.print(f"[red]✗ `playwright install` exited {proc.returncode}[/red]")
+        ok = False
+
+    if config.STORAGE_STATE_PATH.exists():
+        session = auth._session_from_state(
+            __import__("json").loads(config.STORAGE_STATE_PATH.read_text())
+        )
+        if session.cookies and auth.check_session(session):
+            err.print("[green]✓[/green] cached session is valid")
+        else:
+            err.print("[yellow]! cached session is invalid — run `highgrabber login`[/yellow]")
+    else:
+        err.print("[yellow]! no cached session — run `highgrabber login` next[/yellow]")
+
+    return 0 if ok else 1
 
 
 def _cmd_logout(args: argparse.Namespace) -> int:
@@ -200,6 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
     lo.add_argument("--forget-password", action="store_true", help="Also remove the keychain password.")
     lo.set_defaults(func=_cmd_logout)
 
+    dr = sub.add_parser("doctor", help="Install the Playwright browser and verify setup.")
+    dr.set_defaults(func=_cmd_doctor)
+
     return p
 
 
@@ -207,9 +251,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     argv = list(argv if argv is not None else sys.argv[1:])
 
+    if not argv:
+        parser.print_help(sys.stderr)
+        return 0
+
     # Default to `download` when the first arg isn't a known subcommand.
-    known = {"download", "login", "logout", "-h", "--help", "--version"}
-    if not argv or argv[0] not in known:
+    known = {"download", "login", "logout", "doctor", "-h", "--help", "--version"}
+    if argv[0] not in known:
         argv = ["download", *argv]
 
     args = parser.parse_args(argv)
