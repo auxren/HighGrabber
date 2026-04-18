@@ -8,7 +8,6 @@ HTTP error code.
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -26,7 +25,7 @@ from rich.progress import (
 )
 
 from . import config
-from .api import HightailClient, HightailFile, SessionExpired
+from .api import HightailClient, HightailFile
 
 console = Console()
 
