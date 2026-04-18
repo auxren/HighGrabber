@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "highgrabber"
+version = "0.1.0"
+description = "Bulk-download Hightail Spaces links with automated browser auth"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["hightail", "download", "bulk", "archive"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "httpx>=0.27",
+    "playwright>=1.40",
+    "keyring>=24",
+    "platformdirs>=4",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pyinstaller>=6",
+]
+
+[project.scripts]
+highgrabber = "highgrabber.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/auxren/HighGrabber"
+Issues = "https://github.com/auxren/HighGrabber/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/highgrabber"]
