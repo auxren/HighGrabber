@@ -123,6 +123,10 @@ async def _download_one(
             except httpx.HTTPError as exc:
                 last_err = str(exc)
                 ok = False
+            except OSError as exc:
+                return DownloadResult(
+                    file=f, path=dest, status="fail", error=f"OS error: {exc}"
+                )
             if ok:
                 progress.remove_task(task)
                 return DownloadResult(file=f, path=dest, status="done")
