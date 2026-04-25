@@ -105,6 +105,10 @@ async def _download_one(
 ) -> DownloadResult:
     if dest.exists() and dest.stat().st_size == f.size:
         return DownloadResult(file=f, path=dest, status="skip")
+    if dest.suffix.lower() == ".zip":
+        unzipped = dest.with_suffix("")
+        if unzipped.is_dir() and any(unzipped.iterdir()):
+            return DownloadResult(file=f, path=dest, status="skip")
     task = progress.add_task(f.name, total=f.size, start=True)
     url = HightailClient.download_url(f)
     last_err = ""

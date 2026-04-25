@@ -18,9 +18,14 @@ from rich.console import Console
 
 from . import __version__
 from . import auth, config
-from .api import HightailClient, SessionExpired, SpaceUnavailable
+from .api import HightailClient, HightailFile, SessionExpired, SpaceUnavailable
 from .download import DownloadResult, build_plan, download_all
 from .extract import extract_zip, is_zip
+from .filters import (
+    compile_pattern_filter,
+    existence_skip_reason,
+    scan_existing,
+)
 from .parse import collect_slugs
 
 console = Console()
@@ -147,17 +152,74 @@ def _cmd_download(args: argparse.Namespace) -> int:
         err.print("[red]no files to download.[/red]")
         return 1
 
-    total = sum(f.size for f in all_files)
+    enum_total = sum(f.size for f in all_files)
     err.print(
-        f"[bold cyan]preparing {len(all_files)} files, total {_fmt_size(total)} → {dest}[/bold cyan]"
+        f"[dim]enumerated {len(all_files)} files, {_fmt_size(enum_total)}[/dim]"
+    )
+
+    pattern_filter = compile_pattern_filter(args.include, args.exclude)
+    filtered_out: list[tuple[HightailFile, str]] = []
+    remaining: list[HightailFile] = []
+    for f in all_files:
+        reason = pattern_filter(f)
+        if reason:
+            filtered_out.append((f, reason))
+        else:
+            remaining.append(f)
+    if filtered_out:
+        err.print(
+            f"[dim]filter:[/dim] {len(filtered_out)} dropped by --include/--exclude"
+        )
+
+    existence_skipped: list[tuple[HightailFile, str]] = []
+    if args.recursive_skip and remaining:
+        err.print(f"[dim]scanning {dest} for already-present files…[/dim]")
+        idx = scan_existing(dest)
+        after: list[HightailFile] = []
+        for f in remaining:
+            reason = existence_skip_reason(f, idx)
+            if reason:
+                existence_skipped.append((f, reason))
+            else:
+                after.append(f)
+        remaining = after
+        if existence_skipped:
+            err.print(
+                f"[dim]exists:[/dim] {len(existence_skipped)} already present in tree"
+            )
+
+    if not remaining:
+        err.print("[yellow]nothing to download after filters.[/yellow]")
+        if args.dry_run:
+            for f, reason in existence_skipped:
+                console.print(
+                    f"  [dim]skip[/dim] {_fmt_size(f.size):>10}  {f.name}  [dim]({reason})[/dim]"
+                )
+            for f, reason in filtered_out:
+                console.print(
+                    f"  [dim]drop[/dim] {_fmt_size(f.size):>10}  {f.name}  [dim]({reason})[/dim]"
+                )
+        return 0
+
+    total = sum(f.size for f in remaining)
+    err.print(
+        f"[bold cyan]preparing {len(remaining)} files, total {_fmt_size(total)} → {dest}[/bold cyan]"
     )
 
     if args.dry_run:
-        for f in all_files:
-            console.print(f"{_fmt_size(f.size):>10}  {f.name}")
+        for f in remaining:
+            console.print(f"  [green]get[/green]  {_fmt_size(f.size):>10}  {f.name}")
+        for f, reason in existence_skipped:
+            console.print(
+                f"  [dim]skip[/dim] {_fmt_size(f.size):>10}  {f.name}  [dim]({reason})[/dim]"
+            )
+        for f, reason in filtered_out:
+            console.print(
+                f"  [dim]drop[/dim] {_fmt_size(f.size):>10}  {f.name}  [dim]({reason})[/dim]"
+            )
         return 0
 
-    plan = build_plan(all_files, dest)
+    plan = build_plan(remaining, dest)
 
     results = download_all(
         plan,
@@ -228,8 +290,16 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("--save-password", action="store_true", help="Save password to system keychain on login.")
     dl.add_argument("--no-extract", dest="extract", action="store_false", help="Do not unzip archives after download.")
     dl.add_argument("--delete-zips-after", action="store_true", help="Delete .zip after successful extract.")
+    dl.add_argument("--include", help="Only download files whose name matches this regex (case-insensitive).")
+    dl.add_argument("--exclude", help="Skip files whose name matches this regex (case-insensitive).")
+    dl.add_argument(
+        "--no-recursive-skip",
+        dest="recursive_skip",
+        action="store_false",
+        help="Don't pre-scan dest recursively to skip files already present (by name, extracted-dir name, or YYYY-MM-DD date in filename).",
+    )
     dl.add_argument("--dry-run", action="store_true", help="List files that would be downloaded, then exit.")
-    dl.set_defaults(extract=True, func=_cmd_download)
+    dl.set_defaults(extract=True, recursive_skip=True, func=_cmd_download)
 
     lg = sub.add_parser("login", help="Open a browser and establish a Hightail session.")
     lg.add_argument("--email", help="Hightail email.")

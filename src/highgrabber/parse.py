@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 SLUG_RE = re.compile(
-    r"https?://spaces\.hightail\.com/receive/([A-Za-z0-9]+)",
+    r"https?://spaces\.hightail\.com/(?:receive|space)/([A-Za-z0-9]+)",
     re.IGNORECASE,
 )
 
@@ -47,7 +47,7 @@ def collect_slugs(inputs: Iterable[str]) -> list[str]:
         if item == "-":
             _add_many(extract_slugs(sys.stdin.read()))
             continue
-        if "hightail.com/receive/" in item:
+        if "hightail.com/receive/" in item or "hightail.com/space/" in item:
             _add_many(extract_slugs(item))
             continue
         p = Path(item).expanduser()

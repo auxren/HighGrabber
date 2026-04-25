@@ -89,7 +89,8 @@ highgrabber logout   [--forget-password --email EMAIL]
 
 Each input is one of:
 
-- a full Hightail URL (`https://spaces.hightail.com/receive/<slug>`)
+- a full Hightail URL (`https://spaces.hightail.com/receive/<slug>` or
+  `https://spaces.hightail.com/space/<slug>`)
 - a path to any text file — HighGrabber extracts every Hightail link found
   anywhere in it, so forwarded emails, chat exports, and Notes pages all work
 - `-` to read from stdin
@@ -106,6 +107,9 @@ Slugs are de-duplicated across all inputs in order.
 | `--save-password` | off | save password to the system keychain on first login |
 | `--no-extract` | off | keep ZIPs intact instead of auto-extracting |
 | `--delete-zips-after` | off | delete each ZIP after successful extraction |
+| `--include REGEX` | none | only download files whose name matches this regex (case-insensitive) |
+| `--exclude REGEX` | none | skip files whose name matches this regex (case-insensitive) |
+| `--no-recursive-skip` | off | disable the default recursive scan of `--dest` that skips files already present (matches by basename, by extracted-archive directory name, or by `YYYY-MM-DD` date in the filename) |
 
 ### Authentication
 
