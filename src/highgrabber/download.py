@@ -95,6 +95,16 @@ async def _attempt_download(
     return dest.exists() and dest.stat().st_size == expected_size
 
 
+def _fmt_size(n: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB")
+    x = float(n)
+    for u in units:
+        if x < 1024 or u == "TB":
+            return f"{x:.1f} {u}" if u != "B" else f"{int(x)} B"
+        x /= 1024
+    return f"{x} B"
+
+
 async def _download_one(
     client: httpx.AsyncClient,
     sem: asyncio.Semaphore,
@@ -104,39 +114,51 @@ async def _download_one(
     on_session_expired: Callable[[], None],
 ) -> DownloadResult:
     if dest.exists() and dest.stat().st_size == f.size:
+        console.print(f"  [dim]skip[/dim] {f.name}")
         return DownloadResult(file=f, path=dest, status="skip")
     if dest.suffix.lower() == ".zip":
         unzipped = dest.with_suffix("")
         if unzipped.is_dir() and any(unzipped.iterdir()):
+            console.print(f"  [dim]skip[/dim] {f.name} [dim](extracted)[/dim]")
             return DownloadResult(file=f, path=dest, status="skip")
-    task = progress.add_task(f.name, total=f.size, start=True)
     url = HightailClient.download_url(f)
     last_err = ""
+    # The semaphore limits how many downloads run at once. We register the
+    # rich progress task only once we're inside it — registering thousands of
+    # tasks up front before any await deadlocks the live display thread.
     async with sem:
-        for attempt, backoff in enumerate(_BACKOFFS, start=1):
-            try:
-                ok = await _attempt_download(client, url, dest, f.size, progress, task)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in (401, 403):
-                    on_session_expired()
+        console.print(f"  [cyan]get[/cyan]  {f.name} [dim]({_fmt_size(f.size)})[/dim]")
+        task = progress.add_task(f.name, total=f.size, start=True)
+        try:
+            for attempt, backoff in enumerate(_BACKOFFS, start=1):
+                try:
+                    ok = await _attempt_download(client, url, dest, f.size, progress, task)
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code in (401, 403):
+                        on_session_expired()
+                        console.print(f"  [red]FAIL[/red] {f.name}: auth expired ({exc.response.status_code})")
+                        return DownloadResult(
+                            file=f, path=dest, status="fail", error=f"auth expired ({exc.response.status_code})"
+                        )
+                    last_err = str(exc)
+                    ok = False
+                except httpx.HTTPError as exc:
+                    last_err = str(exc)
+                    ok = False
+                except OSError as exc:
+                    console.print(f"  [red]FAIL[/red] {f.name}: OS error: {exc}")
                     return DownloadResult(
-                        file=f, path=dest, status="fail", error=f"auth expired ({exc.response.status_code})"
+                        file=f, path=dest, status="fail", error=f"OS error: {exc}"
                     )
-                last_err = str(exc)
-                ok = False
-            except httpx.HTTPError as exc:
-                last_err = str(exc)
-                ok = False
-            except OSError as exc:
-                return DownloadResult(
-                    file=f, path=dest, status="fail", error=f"OS error: {exc}"
-                )
-            if ok:
-                progress.remove_task(task)
-                return DownloadResult(file=f, path=dest, status="done")
-            if attempt < len(_BACKOFFS):
-                await asyncio.sleep(backoff)
-    progress.remove_task(task)
+                if ok:
+                    console.print(f"  [green]done[/green] {f.name}")
+                    return DownloadResult(file=f, path=dest, status="done")
+                if attempt < len(_BACKOFFS):
+                    console.print(f"  [yellow]retry[/yellow] {f.name} in {backoff}s ({last_err or 'short body'})")
+                    await asyncio.sleep(backoff)
+        finally:
+            progress.remove_task(task)
+    console.print(f"  [red]FAIL[/red] {f.name}: {last_err or 'unknown'}")
     return DownloadResult(file=f, path=dest, status="fail", error=last_err or "unknown")
 
 
