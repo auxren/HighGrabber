@@ -2,11 +2,18 @@
 
 Endpoints used (reverse-engineered from the Spaces web app bundle):
 
-  GET {API_HOST}/api/v1/spaces/url/<slug>?status=SEND
+  GET {API_HOST}/api/v1/spaces/url/<slug>?status=ACTIVE
       → space metadata (includes the internal spaceId, sp-...).
 
+  GET {API_HOST}/api/v2/spacetags/folders/<spaceId>?limit=N&offset=M
+      → list of tag-folders (paginated). Spaces with many files are typically
+      organized into tag-folders rather than at the untagged root.
+
+  GET {API_HOST}/api/v1/files/<spaceId>/tag/<tagId>?limit=N&offset=M&...
+      → files inside one tag-folder (paginated children[]).
+
   GET {API_HOST}/api/v1/files/<spaceId>/untagged?...
-      → the file list for a space (children[]).
+      → files at the space root (no tag). Often empty for tagged spaces.
 
   GET {DOWNLOAD_HOST}/api/v1/download/<spaceId>/<fileId>/<versionId>/<urlenc-name>
       → streams the file bytes; supports Range resume.
@@ -16,7 +23,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -80,10 +87,14 @@ class HightailClient:
         if r.status_code in (401, 403):
             raise SessionExpired(f"{r.status_code} on {r.url}")
 
-    def get_space(self, slug: str) -> SpaceInfo:
+    def get_space(
+        self,
+        slug: str,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> SpaceInfo:
         r = self._http.get(
             f"{config.API_HOST}/api/v1/spaces/url/{slug}",
-            params={"status": "SEND"},
+            params={"status": "ACTIVE"},
         )
         self._raise_for_auth(r)
         if r.status_code == 404:
@@ -94,41 +105,109 @@ class HightailClient:
         space_id = data["id"]
         name = data.get("name") or slug
 
-        files = self._list_files(space_id, slug)
+        files = self._list_files(space_id, slug, progress=progress)
         return SpaceInfo(slug=slug, space_id=space_id, name=name, files=files)
 
-    def _list_files(self, space_id: str, slug: str) -> list[HightailFile]:
-        r = self._http.get(
-            f"{config.API_HOST}/api/v1/files/{space_id}/untagged",
-            params={
-                "cacheBuster": int(time.time() * 1000),
-                "depth": 1,
-                "dir": "ASC",
-                "limit": 500,
-                "offset": 0,
-                "sort": "custom",
-                "spaceUrl": slug,
-                "term": "",
-            },
-        )
-        self._raise_for_auth(r)
-        r.raise_for_status()
-        data = r.json()
-        out: list[HightailFile] = []
-        for child in data.get("children", []) or []:
-            if child.get("isDirectory"):
-                continue
-            if child.get("fileState") not in (None, "AVAILABLE"):
-                continue
-            out.append(
-                HightailFile(
-                    space_id=child["spaceId"],
-                    file_id=child["fileId"],
-                    version_id=child["versionId"],
-                    name=child["name"],
-                    size=int(child.get("size") or 0),
-                )
+    def _get_with_retry(self, url: str, *, params: dict, attempts: int = 3) -> httpx.Response:
+        """Hightail's listing API is slow and occasionally times out; retry."""
+        last_exc: Optional[Exception] = None
+        for i in range(attempts):
+            try:
+                r = self._http.get(url, params=params, timeout=180.0)
+                self._raise_for_auth(r)
+                r.raise_for_status()
+                return r
+            except (httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+                last_exc = exc
+                if i + 1 < attempts:
+                    time.sleep(5)
+        assert last_exc is not None
+        raise last_exc
+
+    def _list_tags(self, space_id: str) -> list[dict]:
+        """Return every tag-folder (`st-...`) defined on the space."""
+        out: list[dict] = []
+        offset = 0
+        page_size = 200
+        while True:
+            r = self._get_with_retry(
+                f"{config.API_HOST}/api/v2/spacetags/folders/{space_id}",
+                params={"limit": page_size, "offset": offset},
             )
+            page = r.json() or []
+            if not isinstance(page, list):
+                break
+            out.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return out
+
+    def _list_files(
+        self,
+        space_id: str,
+        slug: str,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> list[HightailFile]:
+        if progress is None:
+            progress = lambda _msg: None
+        out: list[HightailFile] = []
+        progress("listing untagged root…")
+        out.extend(self._list_at("untagged", space_id, slug))
+        tags = self._list_tags(space_id)
+        progress(f"found {len(tags)} tag-folder(s)")
+        for i, tag in enumerate(tags, 1):
+            tag_id = tag.get("id")
+            if not tag_id:
+                continue
+            tag_name = tag.get("name") or tag_id
+            progress(f"  [{i}/{len(tags)}] {tag_name}")
+            out.extend(self._list_at(f"tag/{tag_id}", space_id, slug))
+        return _dedupe_by_file_id(out)
+
+    def _list_at(self, suffix: str, space_id: str, slug: str) -> list[HightailFile]:
+        """Paginate through `/files/<sp>/<suffix>` and collect AVAILABLE files."""
+        out: list[HightailFile] = []
+        offset = 0
+        page_size = 500
+        while True:
+            r = self._get_with_retry(
+                f"{config.API_HOST}/api/v1/files/{space_id}/{suffix}",
+                params={
+                    "cacheBuster": int(time.time() * 1000),
+                    "depth": 1,
+                    "dir": "ASC",
+                    "limit": page_size,
+                    "offset": offset,
+                    "sort": "custom",
+                    "spaceUrl": slug,
+                    "term": "",
+                },
+            )
+            data = r.json() or {}
+            children = data.get("children") or []
+            if not isinstance(children, list):
+                break
+            for child in children:
+                if child.get("isDirectory"):
+                    continue
+                if child.get("fileState") not in (None, "AVAILABLE"):
+                    continue
+                try:
+                    out.append(
+                        HightailFile(
+                            space_id=child["spaceId"],
+                            file_id=child["fileId"],
+                            version_id=child["versionId"],
+                            name=child["name"],
+                            size=int(child.get("size") or 0),
+                        )
+                    )
+                except KeyError:
+                    continue
+            if len(children) < page_size:
+                break
+            offset += page_size
         return out
 
     @staticmethod
@@ -139,3 +218,15 @@ class HightailClient:
             f"{config.DOWNLOAD_HOST}/api/v1/download/"
             f"{f.space_id}/{f.file_id}/{f.version_id}/{quote(f.name)}"
         )
+
+
+def _dedupe_by_file_id(files: list[HightailFile]) -> list[HightailFile]:
+    """Drop duplicates produced when one file appears under multiple tags."""
+    seen: set[str] = set()
+    out: list[HightailFile] = []
+    for f in files:
+        if f.file_id in seen:
+            continue
+        seen.add(f.file_id)
+        out.append(f)
+    return out

@@ -66,6 +66,20 @@ def _session_from_state(state: dict) -> Session:
     return Session(cookies=jar)
 
 
+def _is_signed_in_state(state: dict) -> bool:
+    """True only after the user has actually signed in.
+
+    Hightail sets `sessionId` and considers `isSessionValid` OK the moment the
+    login page loads — before any sign-in happens. The `userId` cookie, by
+    contrast, is only populated server-side after authentication completes,
+    so it's the most reliable signal that the login flow is really done.
+    """
+    for c in state.get("cookies", []):
+        if c.get("name") == "userId" and "hightail.com" in c.get("domain", ""):
+            return bool(c.get("value"))
+    return False
+
+
 def check_session(session: Session) -> bool:
     """Return True iff Hightail still considers the session valid."""
     try:
@@ -175,13 +189,21 @@ def interactive_login(
 
         console.print("[dim]waiting for sign-in to complete…[/dim]")
 
-        # Wait for the session cookie Hightail sets server-side post-login.
+        # Wait for sign-in to actually complete. Hightail sets `sessionId`
+        # (and isSessionValid returns OK) the moment the login page loads,
+        # well before the user clicks Sign In — so those checks alone will
+        # close the browser too early and persist an anonymous session.
+        # Require the post-auth `userId` cookie too.
         deadline = time.time() + 300
         session: Optional[Session] = None
         while time.time() < deadline:
             state = ctx.storage_state()
             s = _session_from_state(state)
-            if "sessionId" in s.cookies and check_session(s):
+            if (
+                "sessionId" in s.cookies
+                and _is_signed_in_state(state)
+                and check_session(s)
+            ):
                 session = s
                 _save_storage_state(state)
                 break
@@ -206,7 +228,7 @@ def load_session(
     state = _load_storage_state()
     if state is not None:
         s = _session_from_state(state)
-        if s.cookies and check_session(s):
+        if s.cookies and _is_signed_in_state(state) and check_session(s):
             return s
     if not allow_interactive:
         raise RuntimeError("no valid cached session; run `highgrabber login` first")

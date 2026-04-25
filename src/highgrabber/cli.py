@@ -131,12 +131,12 @@ def _cmd_download(args: argparse.Namespace) -> int:
     with HightailClient(session) as client:
         for i, slug in enumerate(slugs, 1):
             try:
-                info = client.get_space(slug)
+                info = client.get_space(slug, progress=lambda m: err.print(f"[dim]{m}[/dim]"))
             except SessionExpired:
                 err.print("[yellow]session expired while enumerating; re-logging in[/yellow]")
                 session = auth.refresh_session(email=args.email)
                 with HightailClient(session) as c2:
-                    info = c2.get_space(slug)
+                    info = c2.get_space(slug, progress=lambda m: err.print(f"[dim]{m}[/dim]"))
             except SpaceUnavailable:
                 err.print(f"[yellow]skip unavailable space #{i}: {slug}[/yellow]")
                 continue
