@@ -108,19 +108,28 @@ class HightailClient:
         files = self._list_files(space_id, slug, progress=progress)
         return SpaceInfo(slug=slug, space_id=space_id, name=name, files=files)
 
-    def _get_with_retry(self, url: str, *, params: dict, attempts: int = 3) -> httpx.Response:
-        """Hightail's listing API is slow and occasionally times out; retry."""
+    _RETRY_STATUSES = (408, 429, 500, 502, 503, 504)
+    _RETRY_BACKOFFS = (5, 15, 45, 120)
+
+    def _get_with_retry(self, url: str, *, params: dict) -> httpx.Response:
+        """Hightail's listing API is slow and frequently 504s; retry with backoff."""
         last_exc: Optional[Exception] = None
+        attempts = len(self._RETRY_BACKOFFS) + 1
         for i in range(attempts):
             try:
                 r = self._http.get(url, params=params, timeout=180.0)
                 self._raise_for_auth(r)
-                r.raise_for_status()
-                return r
+                if r.status_code in self._RETRY_STATUSES:
+                    last_exc = httpx.HTTPStatusError(
+                        f"{r.status_code} on listing", request=r.request, response=r
+                    )
+                else:
+                    r.raise_for_status()
+                    return r
             except (httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ConnectError) as exc:
                 last_exc = exc
-                if i + 1 < attempts:
-                    time.sleep(5)
+            if i < len(self._RETRY_BACKOFFS):
+                time.sleep(self._RETRY_BACKOFFS[i])
         assert last_exc is not None
         raise last_exc
 
@@ -163,6 +172,8 @@ class HightailClient:
             tag_name = tag.get("name") or tag_id
             progress(f"  [{i}/{len(tags)}] {tag_name}")
             out.extend(self._list_at(f"tag/{tag_id}", space_id, slug))
+            if i < len(tags):
+                time.sleep(0.5)
         return _dedupe_by_file_id(out)
 
     def _list_at(self, suffix: str, space_id: str, slug: str) -> list[HightailFile]:
