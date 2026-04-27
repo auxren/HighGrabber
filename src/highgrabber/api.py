@@ -114,7 +114,7 @@ class HightailClient:
         return SpaceInfo(slug=slug, space_id=space_id, name=name, files=files)
 
     _RETRY_STATUSES = (408, 429, 500, 502, 503, 504)
-    _RETRY_BACKOFFS = (5, 15, 45, 120)
+    _RETRY_BACKOFFS = (15, 60, 180, 600)
 
     def _get_with_retry(self, url: str, *, params: dict) -> httpx.Response:
         """Hightail's listing API is slow and frequently 504s; retry with backoff."""
@@ -170,15 +170,28 @@ class HightailClient:
         out.extend(self._list_at("untagged", space_id, slug))
         tags = self._list_tags(space_id)
         progress(f"found {len(tags)} tag-folder(s)")
+        failed: list[str] = []
         for i, tag in enumerate(tags, 1):
             tag_id = tag.get("id")
             if not tag_id:
                 continue
             tag_name = tag.get("name") or tag_id
             progress(f"  [{i}/{len(tags)}] {tag_name}")
-            out.extend(self._list_at(f"tag/{tag_id}", space_id, slug))
+            try:
+                out.extend(self._list_at(f"tag/{tag_id}", space_id, slug))
+            except httpx.HTTPError as exc:
+                # A single tag listing failure (e.g. 504 after all retries)
+                # used to abort the whole enumeration. Log and continue;
+                # the user can re-run later to pick up missed tags.
+                progress(f"  [{i}/{len(tags)}] WARN: skip {tag_name}: {exc}")
+                failed.append(tag_name)
             if i < len(tags):
                 time.sleep(0.5)
+        if failed:
+            progress(
+                f"WARNING: enumeration skipped {len(failed)} tag(s) after retries: "
+                f"{', '.join(failed)}. Re-run later to pick them up."
+            )
         return _dedupe_by_file_id(out)
 
     def _list_at(self, suffix: str, space_id: str, slug: str) -> list[HightailFile]:
