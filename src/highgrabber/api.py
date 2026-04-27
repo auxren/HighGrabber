@@ -92,13 +92,18 @@ class HightailClient:
         slug: str,
         progress: Optional[Callable[[str], None]] = None,
     ) -> SpaceInfo:
+        # Hightail accepts ?status=SEND for both public-collection spaces and
+        # private receive/<slug> invitations. ACTIVE works for some but
+        # 404s on receive links with `{"errorMessage":"invalid status"}`,
+        # so SEND is the universal choice.
         r = self._http.get(
             f"{config.API_HOST}/api/v1/spaces/url/{slug}",
-            params={"status": "ACTIVE"},
+            params={"status": "SEND"},
         )
         self._raise_for_auth(r)
         if r.status_code == 404:
-            # Hightail returns {"errorMessage":"invalid status"} for expired spaces.
+            # Hightail returns {"errorMessage":"invalid status"} for expired
+            # spaces and for spaces that genuinely don't exist.
             raise SpaceUnavailable(slug)
         r.raise_for_status()
         data = r.json()

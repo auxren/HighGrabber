@@ -150,6 +150,14 @@ async def _download_one(
                     return DownloadResult(
                         file=f, path=dest, status="fail", error=f"OS error: {exc}"
                     )
+                except Exception as exc:  # noqa: BLE001
+                    # h2/httpcore can raise non-httpx exceptions (e.g.
+                    # h2.exceptions.ProtocolError when Hightail abruptly
+                    # closes a stream). One such error used to abort the
+                    # whole asyncio.gather and kill the run; treat them as
+                    # transient and retry.
+                    last_err = f"{type(exc).__name__}: {exc}"
+                    ok = False
                 if ok:
                     console.print(f"  [green]done[/green] {f.name}")
                     return DownloadResult(file=f, path=dest, status="done")
